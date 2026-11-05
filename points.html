@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>點位清單</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 16px -apple-system, system-ui, sans-serif; }
+  header { position: sticky; top: 0; padding: 10px env(safe-area-inset-right) 10px env(safe-area-inset-left);
+           background: Canvas; border-bottom: 1px solid rgba(128,128,128,.3); display: flex; gap: 8px; align-items: center; }
+  header button { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  #count { margin-left: auto; font-size: 13px; opacity: .6; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { border-bottom: 1px solid rgba(128,128,128,.2); }
+  li button { width: 100%; text-align: left; font: inherit; padding: 14px 16px; border: 0; background: transparent;
+              color: inherit; display: flex; align-items: baseline; gap: 10px; }
+  li button:active { background: rgba(0,122,255,.2); }
+  .idx { min-width: 2.2em; font-variant-numeric: tabular-nums; opacity: .5; }
+  .coord { font-variant-numeric: tabular-nums; }
+  .dist { margin-left: auto; font-size: 13px; opacity: .6; }
+  li.visited button { opacity: .4; }
+  li.visited .coord::after { content: " ✓"; }
+</style>
+</head>
+<body>
+<header>
+  <button id="sort">依距離排序</button>
+  <button id="reset">清除已跳過</button>
+  <span id="count"></span>
+</header>
+<ul id="list"></ul>
+
+<script>
+const POINTS = [
+  [25.060451, 121.525421], [25.041502, 121.545080], [25.027667, 121.563314],
+  [25.057386, 121.517608], [25.059255, 121.618029], [25.046310, 121.517320],
+  [25.064535, 121.511022], [25.065996, 121.516109], [25.046396, 121.517641],
+  [25.034398, 121.527193], [25.030264, 121.516591], [25.026327, 121.494065],
+  [25.000015, 121.555730], [24.984776, 121.561390], [25.044297, 121.568912],
+  [25.049444, 121.578913], [25.052090, 121.545616], [25.050628, 121.560926],
+  [25.032679, 121.538229], [25.065713, 121.540813], [25.083522, 121.566988],
+  [25.081860, 121.592350], [25.068906, 121.613817], [25.070705, 121.611694],
+  [25.084825, 121.593229], [25.068771, 121.585883], [25.140375, 121.500477],
+  [25.107982, 121.528818], [25.083037, 121.519564], [25.088826, 121.518389],
+  [25.094649, 121.521969], [25.146579, 121.398156], [25.170998, 121.445765],
+  [25.183434, 121.424249], [25.177762, 121.443830], [25.156376, 121.459403],
+  [25.136214, 121.461779], [25.258803, 121.502220], [25.221110, 121.637982],
+  [25.107807, 121.806041], [25.067319, 121.662682], [25.062470, 121.650081],
+  [25.065928, 121.642137], [25.084577, 121.438664], [25.089657, 121.446018],
+  [25.059591, 121.431685], [25.040849, 121.425017], [25.077382, 121.393903],
+  [25.073074, 121.370516], [25.024504, 121.424700], [25.030698, 121.434171],
+  [25.019366, 121.421590], [25.050679, 121.454665], [25.049475, 121.447467],
+  [25.044946, 121.452409], [25.054877, 121.466380], [25.065335, 121.457454],
+  [25.034613, 121.449407], [25.081899, 121.464939], [25.086210, 121.479431],
+  [25.078792, 121.483176], [25.060911, 121.497965], [25.067316, 121.492584],
+  [25.072564, 121.496348], [25.069462, 121.477170], [25.022557, 121.461210],
+  [25.008488, 121.471732], [25.024399, 121.471128], [25.031144, 121.478446],
+  [25.015211, 121.479341], [25.002478, 121.462831], [24.993070, 121.504638],
+  [24.998428, 121.499000], [25.001669, 121.481186], [24.990637, 121.492360],
+  [24.999262, 121.488320], [25.013025, 121.512465], [25.002846, 121.511073],
+  [24.999060, 121.525490], [24.975422, 121.536645], [24.963780, 121.514863],
+  [25.002343, 121.619051],
+];
+
+const key = p => p[0].toFixed(6) + ',' + p[1].toFixed(6);
+let visited = new Set(JSON.parse(localStorage.getItem('visited') || '[]'));
+let here = null;
+
+// The host app hooks navigator.clipboard.writeText (and the copy event) to grab
+// coordinates and jump, so copying the text is what triggers the simulation.
+function sendCoordinate(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+}
+
+function distance(a, b) {
+  const R = 6371000, toRad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * toRad;
+  const dLon = (b[1] - a[1]) * toRad;
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(a[0] * toRad) * Math.cos(b[0] * toRad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function render() {
+  const rows = POINTS.map((p, i) => ({ p, n: i + 1 }));
+  if (here) rows.sort((a, b) => distance(here, a.p) - distance(here, b.p));
+  const list = document.getElementById('list');
+  list.textContent = '';
+  for (const { p, n } of rows) {
+    const text = key(p);
+    const li = document.createElement('li');
+    if (visited.has(text)) li.className = 'visited';
+    const btn = document.createElement('button');
+    btn.innerHTML = '<span class="idx">' + n + '</span><span class="coord">' + text + '</span>';
+    if (here) {
+      const d = distance(here, p);
+      const span = document.createElement('span');
+      span.className = 'dist';
+      span.textContent = d < 1000 ? Math.round(d) + ' m' : (d / 1000).toFixed(1) + ' km';
+      btn.appendChild(span);
+    }
+    btn.onclick = () => {
+      sendCoordinate(text);
+      visited.add(text);
+      localStorage.setItem('visited', JSON.stringify([...visited]));
+      li.className = 'visited';
+      updateCount();
+    };
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+  updateCount();
+}
+
+function updateCount() {
+  document.getElementById('count').textContent = visited.size + ' / ' + POINTS.length;
+}
+
+document.getElementById('sort').onclick = e => {
+  if (!navigator.geolocation) return;
+  e.target.textContent = '定位中…';
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      here = [pos.coords.latitude, pos.coords.longitude];
+      e.target.textContent = '依距離排序';
+      render();
+    },
+    () => { e.target.textContent = '定位失敗'; },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+  );
+};
+
+document.getElementById('reset').onclick = () => {
+  visited = new Set();
+  localStorage.removeItem('visited');
+  render();
+};
+
+render();
+</script>
+</body>
+</html>
